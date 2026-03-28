@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>3D Ink Shooter - 4vs4 CPU Battle</title>
+    <title>3D Ink Shooter - Dynamic 8-Player Battle</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body { margin: 0; overflow: hidden; background: #050505; font-family: 'Arial Black', sans-serif; user-select: none; touch-action: none; }
@@ -18,7 +18,7 @@
         #miniMap { width: 100%; height: 100%; }
         #ratioBar { position: absolute; bottom: 20px; left: 150px; width: 20px; height: 120px; background: #3D9140; border: 2px solid white; display: flex; flex-direction: column-reverse; overflow: hidden; z-index: 100; }
         #pinkRatioFill { width: 100%; background: #FD2996; transition: height 0.3s; }
-        #startOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 40px; background: rgba(0,0,0,0.8); z-index: 1000; cursor: pointer; text-align: center; }
+        #startOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; background: rgba(0,0,0,0.8); z-index: 1000; cursor: pointer; text-align: center; }
         #finishText { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0); color: #fff; font-size: 80px; text-shadow: 0 0 30px #000; z-index: 1100; transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; }
         #resultScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 1200; color: white; }
         #mobileControls { position: absolute; bottom: 20px; right: 20px; display: none; gap: 20px; z-index: 500; }
@@ -31,11 +31,15 @@
 <body>
 
     <div id="crosshair"></div>
-    <div id="startOverlay">TAP TO START (4V4 CPU)</div>
+    <div id="startOverlay">
+        <div style="font-size: 60px; margin-bottom: 20px;">3D INK SHOOTER</div>
+        <div id="playerCount">WAITING FOR PLAYERS...</div>
+        <div style="font-size: 20px; margin-top: 30px; color: #aaa;">TAP TO JOIN BATTLE</div>
+    </div>
     <div id="finishText">FINISH!</div>
 
     <div id="ui">
-        <div id="timer">01:00</div>
+        <div id="timer">READY</div>
         <div id="inkBar"><div id="inkFill"></div></div>
     </div>
 
@@ -59,14 +63,13 @@
             <span style="color:#FD2996">PINK: <span id="finalPink">0</span>%</span> / 
             <span style="color:#3D9140">COBALT: <span id="finalGreen">0</span>%</span>
         </div>
-        <button onclick="location.reload()" style="padding:15px 30px; font-size:20px; cursor:pointer; border-radius:50px; border:none; background:#fff; font-weight:bold;">REMATCH</button>
+        <button onclick="resetGameServer()" style="padding:15px 30px; font-size:20px; cursor:pointer; border-radius:50px; border:none; background:#fff; font-weight:bold;">NEXT MATCH</button>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, set, push, onValue, onChildAdded, onChildRemoved, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // Firebase Configuration
         const firebaseConfig = {
           apiKey: "AIzaSyC74b-33rjqnysLOgVEbtAKsrqJSfaWZEE",
           authDomain: "supura-8f064.firebaseapp.com",
@@ -81,15 +84,19 @@
         const db = getDatabase(app);
         const myId = "player_" + Math.random().toString(36).substring(2, 7);
         const playersRef = ref(db, 'players/' + myId);
+        const allPlayersRef = ref(db, 'players');
         const inkRef = ref(db, 'ink');
+        const gameStateRef = ref(db, 'gameState');
 
         const TEAM_PINK = 0xFD2996;
         const TEAM_GREEN = 0x3D9140;
         const MAP_SIZE = 300;
+        const GAME_DURATION = 60000;
         
         let gameActive = false, gameOver = false;
         let isShooting = false, isMobileDive = false;
-        let timeLeft = 60, yaw = 0, pitch = 0.3, inkHeightOffset = 0.12;
+        let yaw = 0, pitch = 0.3, inkHeightOffset = 0.12;
+        let serverEndTime = null;
         const keys = {};
         const isTouch = 'ontouchstart' in window;
         const touchState = { moveID: null, move: {x:0, y:0}, lookID: null, lastLookX: 0, lastLookY: 0 };
@@ -119,28 +126,74 @@
         addObstacle(5, 15, MAP_SIZE, 150, 7.5, 0); addObstacle(5, 15, MAP_SIZE, -150, 7.5, 0);
         addObstacle(60, 8, 60, 0, 4, 0);
 
-        const agents = [], bullets = [], splats = [];
+        let agents = [], bullets = [], splats = [];
+        let otherPlayers = {};
+        let cpus = [];
 
-        function createAgent(team, isPlayer, x, z, isCPU = false) {
+        function createAgent(team, isPlayer, x, z, isCPU = false, id = null) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(2.5, 3.5, 2.5), new THREE.MeshPhongMaterial({ color: team }));
             group.add(body); group.position.set(x, 1.75, z);
             scene.add(group);
-            const agent = { 
-                group, team, isPlayer, isCPU, 
-                hp: 100, ink: 100, isDead: false, 
-                cpuDir: new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize(),
-                cpuTimer: 0, 
-                spawnPos: {x, z} 
-            };
+            const agent = { id, group, team, isPlayer, isCPU, hp: 100, ink: 100, isDead: false, cpuDir: new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize(), cpuTimer: 0, spawnPos: {x, z} };
             agents.push(agent);
             return agent;
         }
 
-        // チーム生成 (自分含め4vs4)
-        const player = createAgent(TEAM_PINK, true, -100, 100);
-        for(let i=0; i<3; i++) createAgent(TEAM_PINK, false, -100 + (i*10), 80, true); // 味方CPU
-        for(let i=0; i<4; i++) createAgent(TEAM_GREEN, false, 100 - (i*10), -100, true); // 敵CPU
+        // 自分の生成
+        const myTeam = TEAM_PINK; // 簡易化のため自分は常にピンク
+        const player = createAgent(myTeam, true, -100, 100, false, myId);
+
+        // --- 8人スロット同期ロジック ---
+        onValue(allPlayersRef, (snapshot) => {
+            const data = snapshot.val() || {};
+            const humanCount = Object.keys(data).length;
+            document.getElementById('playerCount').innerText = `PLAYERS: ${humanCount} / 8`;
+
+            // 他プレイヤーの表示更新
+            for (let id in data) {
+                if (id === myId) continue;
+                const p = data[id];
+                if (!otherPlayers[id]) {
+                    otherPlayers[id] = createAgent(p.team, false, p.x, p.z, false, id);
+                } else {
+                    otherPlayers[id].group.position.lerp(new THREE.Vector3(p.x, p.isStealth ? 0.5 : 1.75, p.z), 0.2);
+                    otherPlayers[id].group.rotation.y = p.ry;
+                    otherPlayers[id].group.scale.y = p.isStealth ? 0.2 : 1.0;
+                }
+            }
+            // 退出したプレイヤーの削除
+            for (let id in otherPlayers) {
+                if (!data[id]) {
+                    scene.remove(otherPlayers[id].group);
+                    agents = agents.filter(a => a.id !== id);
+                    delete otherPlayers[id];
+                }
+            }
+
+            // CPUの動的調整 (8 - 人間の数)
+            const targetCpuCount = 8 - humanCount;
+            adjustCPUs(targetCpuCount);
+        });
+
+        function adjustCPUs(count) {
+            // 現在のCPUを一旦消去して再配置（または増減）
+            cpus.forEach(c => { scene.remove(c.group); agents = agents.filter(a => a !== c); });
+            cpus = [];
+            for (let i = 0; i < count; i++) {
+                // 半分は味方(ピンク)、半分は敵(グリーン)
+                const team = (i % 2 === 0) ? TEAM_GREEN : TEAM_PINK;
+                const x = team === TEAM_PINK ? -80 - (i*10) : 80 + (i*10);
+                const z = team === TEAM_PINK ? 80 : -80;
+                const cpu = createAgent(team, false, x, z, true);
+                cpus.push(cpu);
+            }
+        }
+
+        onValue(gameStateRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data) { serverEndTime = data.endTime; gameActive = true; document.getElementById('startOverlay').style.display = 'none'; }
+        });
 
         onChildAdded(inkRef, (snapshot) => {
             const data = snapshot.val();
@@ -149,143 +202,79 @@
 
         function localCreateSplat(x, z, team, shouldSync) {
             inkHeightOffset += 0.0002;
-            if (inkHeightOffset > 0.5) inkHeightOffset = 0.12;
             const s = new THREE.Mesh(new THREE.CircleGeometry(7, 8), new THREE.MeshBasicMaterial({ color: team, side: THREE.DoubleSide }));
-            s.position.set(x, inkHeightOffset, z); s.rotation.x = -Math.PI / 2;
+            s.position.set(x, Math.min(0.5, inkHeightOffset), z); s.rotation.x = -Math.PI / 2;
             scene.add(s); splats.push({ x, z, team, mesh: s });
-            if (splats.length > 1500) { const old = splats.shift(); scene.remove(old.mesh); }
+            if (splats.length > 1000) { const old = splats.shift(); scene.remove(old.mesh); }
             if (shouldSync) push(inkRef, { x, z, team });
         }
 
-        // --- Inputs ---
-        if(isTouch) {
-            document.getElementById('mobileControls').style.display = 'flex';
-            document.getElementById('joyLeft').style.display = 'block';
-        }
-
-        document.getElementById('startOverlay').addEventListener('click', () => {
+        // 入力系
+        document.getElementById('startOverlay').onclick = () => {
             if(!isTouch) renderer.domElement.requestPointerLock();
-            document.getElementById('startOverlay').style.display = 'none';
-            gameActive = true;
-            startTimer();
-        });
+            if(!gameActive) set(gameStateRef, { endTime: Date.now() + GAME_DURATION });
+        };
 
+        // ... (以下、タッチ・移動・カメラ・描画ロジックは前回と同様の最適化版を維持) ...
         const stick = document.getElementById('joyStick');
-        window.addEventListener('touchstart', e => {
-            Array.from(e.changedTouches).forEach(t => {
-                if(t.clientX < window.innerWidth / 2) touchState.moveID = t.identifier;
-                else { touchState.lookID = t.identifier; touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY; }
-            });
-        }, { passive: false });
-
-        window.addEventListener('touchmove', e => {
-            Array.from(e.changedTouches).forEach(t => {
-                if(t.identifier === touchState.moveID) {
-                    const rect = document.getElementById('joyLeft').getBoundingClientRect();
-                    const dx = t.clientX - (rect.left + 60), dy = t.clientY - (rect.top + 60);
-                    const dist = Math.min(50, Math.hypot(dx, dy));
-                    const angle = Math.atan2(dy, dx);
-                    touchState.move.x = (Math.cos(angle) * dist) / 50;
-                    touchState.move.y = (Math.sin(angle) * dist) / 50;
-                    stick.style.transform = `translate(${touchState.move.x*50}px, ${touchState.move.y*50}px)`;
-                } else if(t.identifier === touchState.lookID) {
-                    yaw -= (t.clientX - touchState.lastLookX) * 0.005;
-                    pitch = Math.max(-0.6, Math.min(0.8, pitch - (t.clientY - touchState.lastLookY) * 0.005));
-                    touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY;
-                }
-            });
-        }, { passive: false });
-
-        window.addEventListener('touchend', e => {
-            Array.from(e.changedTouches).forEach(t => {
-                if(t.identifier === touchState.moveID) { touchState.move = {x:0, y:0}; stick.style.transform = `translate(0,0)`; }
-            });
-        });
-
+        window.addEventListener('touchstart', e => { Array.from(e.changedTouches).forEach(t => { if(t.clientX < window.innerWidth / 2) touchState.moveID = t.identifier; else { touchState.lookID = t.identifier; touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY; } }); }, { passive: false });
+        window.addEventListener('touchmove', e => { Array.from(e.changedTouches).forEach(t => { if(t.identifier === touchState.moveID) { const rect = document.getElementById('joyLeft').getBoundingClientRect(); const dx = t.clientX - (rect.left + 60), dy = t.clientY - (rect.top + 60); const dist = Math.min(50, Math.hypot(dx, dy)); const angle = Math.atan2(dy, dx); touchState.move.x = (Math.cos(angle) * dist) / 50; touchState.move.y = (Math.sin(angle) * dist) / 50; stick.style.transform = `translate(${touchState.move.x*50}px, ${touchState.move.y*50}px)`; } else if(t.identifier === touchState.lookID) { yaw -= (t.clientX - touchState.lastLookX) * 0.005; pitch = Math.max(-0.6, Math.min(0.8, pitch - (t.clientY - touchState.lastLookY) * 0.005)); touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY; } }); }, { passive: false });
+        window.addEventListener('touchend', e => { Array.from(e.changedTouches).forEach(t => { if(t.identifier === touchState.moveID) { touchState.move = {x:0, y:0}; stick.style.transform = `translate(0,0)`; } }); });
         document.getElementById('btnShoot').ontouchstart = () => isShooting = true;
         document.getElementById('btnShoot').ontouchend = () => isShooting = false;
         document.getElementById('btnDive').ontouchstart = () => isMobileDive = true;
         document.getElementById('btnDive').ontouchend = () => isMobileDive = false;
-
-        document.addEventListener('mousemove', (e) => {
-            if (document.pointerLockElement === renderer.domElement) {
-                yaw -= e.movementX * 0.0025;
-                pitch = Math.max(-0.6, Math.min(0.8, pitch - e.movementY * 0.0025));
-            }
-        });
-
+        document.addEventListener('mousemove', (e) => { if (document.pointerLockElement === renderer.domElement) { yaw -= e.movementX * 0.0025; pitch = Math.max(-0.6, Math.min(0.8, pitch - e.movementY * 0.0025)); } });
         window.onkeydown = e => keys[e.code] = true;
         window.onkeyup = e => keys[e.code] = false;
         window.onmousedown = () => { if(gameActive) isShooting = true; };
         window.onmouseup = () => isShooting = false;
 
-        function startTimer() {
-            const timer = setInterval(() => {
-                if (timeLeft <= 0) { clearInterval(timer); finishGame(); return; }
-                timeLeft--;
-                document.getElementById('timer').innerText = `00:${timeLeft.toString().padStart(2,'0')}`;
-            }, 1000);
-        }
-
         const mapCanvas = document.getElementById('miniMap'), mapCtx = mapCanvas.getContext('2d');
 
         function update() {
             requestAnimationFrame(update);
-            
-            if (gameActive && !gameOver) {
-                // Bullets
+            if (gameActive && !gameOver && serverEndTime) {
+                const now = Date.now();
+                const remaining = Math.max(0, Math.floor((serverEndTime - now) / 1000));
+                document.getElementById('timer').innerText = `00:${remaining.toString().padStart(2, '0')}`;
+                if (remaining <= 0) { finishGame(); return; }
+
                 bullets.forEach((b, i) => {
                     b.mesh.position.addScaledVector(b.dir, 2.0);
-                    
-                    // 当たり判定 (CPU/Player)
                     agents.forEach(a => {
                         if(!a.isDead && a.team !== b.team && b.mesh.position.distanceTo(a.group.position) < 3) {
-                            a.isDead = true;
-                            a.group.visible = false;
-                            setTimeout(() => { 
-                                a.isDead = false; a.group.visible = true; 
-                                a.group.position.set(a.spawnPos.x, 1.75, a.spawnPos.z); 
-                            }, 4000);
+                            a.isDead = true; a.group.visible = false;
+                            setTimeout(() => { a.isDead = false; a.group.visible = true; a.group.position.set(a.spawnPos.x, 1.75, a.spawnPos.z); }, 4000);
                             b.life = 0;
                         }
                     });
-
                     if (--b.life <= 0 || b.mesh.position.y <= 0) {
                         localCreateSplat(b.mesh.position.x, b.mesh.position.z, b.team, true);
                         scene.remove(b.mesh); bullets.splice(i, 1);
                     }
                 });
 
-                // Agents logic
                 agents.forEach(a => {
-                    if(a.isDead) return;
+                    if(a.isDead || !a.isPlayer && !a.isCPU) return; // 他プレイヤーの移動はonValueで処理
 
-                    // Ink Check
                     let onInk = null;
                     for (let i = splats.length - 1; i >= Math.max(0, splats.length - 30); i--) {
-                        if (Math.hypot(splats[i].x - a.group.position.x, splats[i].z - a.group.position.z) < 8) {
-                            onInk = splats[i].team; break;
-                        }
+                        if (Math.hypot(splats[i].x - a.group.position.x, splats[i].z - a.group.position.z) < 8) { onInk = splats[i].team; break; }
                     }
 
                     if(a.isPlayer) {
-                        // Player Move
                         player.isStealth = !isShooting && (keys['ShiftLeft'] || isMobileDive) && onInk === player.team;
                         player.group.scale.y = player.isStealth ? 0.2 : 1.0;
                         player.group.position.y = player.isStealth ? 0.5 : 1.75;
                         player.ink = player.isStealth ? Math.min(100, player.ink + 1.2) : Math.min(100, player.ink + 0.1);
-
                         let speed = (onInk && onInk !== player.team) ? 0.1 : (player.isStealth ? 1.1 : 0.55);
                         const oldPos = player.group.position.clone();
                         const mv = new THREE.Vector3();
                         if (isTouch) { mv.x = touchState.move.x; mv.z = touchState.move.y; }
-                        else {
-                            if (keys['KeyW']) mv.z -= 1; if (keys['KeyS']) mv.z += 1;
-                            if (keys['KeyA']) mv.x -= 1; if (keys['KeyD']) mv.x += 1;
-                        }
+                        else { if (keys['KeyW']) mv.z -= 1; if (keys['KeyS']) mv.z += 1; if (keys['KeyA']) mv.x -= 1; if (keys['KeyD']) mv.x += 1; }
                         if (mv.length() > 0) player.group.translateOnAxis(mv.normalize(), speed); 
                         player.group.rotation.y = yaw;
-
                         if (isShooting && player.ink > 2) {
                             player.ink -= 0.6;
                             if (Math.random() > 0.5) {
@@ -297,16 +286,10 @@
                         }
                         set(playersRef, { x: player.group.position.x, z: player.group.position.z, ry: yaw, team: player.team, isStealth: player.isStealth });
                     } else if(a.isCPU) {
-                        // CPU Move AI
                         a.cpuTimer--;
-                        if(a.cpuTimer <= 0) {
-                            a.cpuTimer = 60 + Math.random() * 100;
-                            a.cpuDir.set(Math.random()-0.5, 0, Math.random()-0.5).normalize();
-                        }
+                        if(a.cpuTimer <= 0) { a.cpuTimer = 60 + Math.random() * 100; a.cpuDir.set(Math.random()-0.5, 0, Math.random()-0.5).normalize(); }
                         a.group.position.addScaledVector(a.cpuDir, 0.35);
                         a.group.rotation.y = Math.atan2(a.cpuDir.x, a.cpuDir.z);
-
-                        // CPU Shoot AI
                         if(Math.random() > 0.97) {
                             const b = new THREE.Mesh(new THREE.SphereGeometry(0.7), new THREE.MeshBasicMaterial({ color: a.team }));
                             b.position.copy(a.group.position).y += 1; scene.add(b);
@@ -316,17 +299,10 @@
                 });
             }
 
-            // Camera
             const dist = 18;
-            camera.position.set(
-                player.group.position.x + dist * Math.sin(yaw) * Math.cos(pitch),
-                player.group.position.y + 8 + dist * Math.sin(pitch),
-                player.group.position.z + dist * Math.cos(yaw) * Math.cos(pitch)
-            );
+            camera.position.set(player.group.position.x + dist * Math.sin(yaw) * Math.cos(pitch), player.group.position.y + 8 + dist * Math.sin(pitch), player.group.position.z + dist * Math.cos(yaw) * Math.cos(pitch));
             camera.lookAt(player.group.position.x, player.group.position.y + 1, player.group.position.z);
 
-            // UI Rendering
-            document.getElementById('inkFill').style.width = player.ink + '%';
             mapCtx.fillStyle = '#111'; mapCtx.fillRect(0, 0, 180, 180);
             let pCount = 0;
             splats.forEach(s => {
@@ -343,11 +319,18 @@
         }
 
         function finishGame() {
-            gameOver = true; remove(playersRef);
+            gameOver = true;
             document.getElementById('finishText').style.transform = 'translate(-50%, -50%) scale(1)';
             setTimeout(() => { document.getElementById('resultScreen').style.display = 'flex'; }, 3000);
         }
 
+        window.resetGameServer = () => {
+            remove(inkRef);
+            set(gameStateRef, { endTime: Date.now() + GAME_DURATION });
+            location.reload();
+        };
+
+        window.onbeforeunload = () => remove(playersRef);
         window.onresize = () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
         update();
     </script>
