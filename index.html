@@ -21,15 +21,14 @@
         
         #startOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 40px; background: rgba(0,0,0,0.8); z-index: 1000; cursor: pointer; text-align: center; }
         #countdownDisp { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 120px; display: none; z-index: 1001; text-shadow: 0 0 30px #FD2996; pointer-events: none; }
-        #respawnUI { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff0000; font-size: 40px; display: none; text-align: center; z-index: 900; text-shadow: 0 0 15px #000; pointer-events: none; }
         #finishText { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0); color: #fff; font-size: 80px; text-shadow: 0 0 30px #000; z-index: 1100; transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; }
         #resultScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 1200; color: white; }
         
-        /* Mobile Controls */
+        /* Mobile UI */
         #mobileControls { position: absolute; bottom: 20px; right: 20px; display: none; gap: 20px; z-index: 500; }
-        .m-btn { width: 80px; height: 80px; background: rgba(255,255,255,0.2); border: 4px solid white; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px; touch-action: none; }
-        #joyLeft { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; display: none; z-index: 500; border: 2px solid rgba(255,255,255,0.3); }
-        #joyStick { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: white; border-radius: 50%; opacity: 0.5; }
+        .m-btn { width: 85px; height: 85px; background: rgba(255,255,255,0.2); border: 4px solid white; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 16px; touch-action: none; -webkit-tap-highlight-color: transparent; }
+        #joyLeft { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; display: none; z-index: 500; border: 2px solid rgba(255,255,255,0.3); touch-action: none; }
+        #joyStick { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: white; border-radius: 50%; opacity: 0.5; pointer-events: none; }
     </style>
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
 </head>
@@ -38,7 +37,6 @@
     <div id="crosshair"></div>
     <div id="startOverlay">TAP TO START</div>
     <div id="countdownDisp">3</div>
-    <div id="respawnUI">SPLATTED!<br>RESPAWN IN <span id="respawnTimer">3</span></div>
     <div id="finishText">FINISH!</div>
 
     <div id="ui">
@@ -90,7 +88,6 @@
         const playersRef = ref(db, 'players/' + myId);
         const inkRef = ref(db, 'ink');
 
-        // Game Constants
         const TEAM_PINK = 0xFD2996;
         const TEAM_GREEN = 0x3D9140;
         const MAP_SIZE = 300;
@@ -99,9 +96,9 @@
         let isShooting = false, isMobileDive = false;
         let timeLeft = 60, yaw = 0, pitch = 0.3, inkHeightOffset = 0.12;
         const keys = {};
-        const touchState = { move: {x:0, y:0}, look: {x:0, y:0} };
+        const isTouch = 'ontouchstart' in window;
+        const touchState = { moveID: null, move: {x:0, y:0}, lookID: null, lastLookX: 0, lastLookY: 0 };
 
-        // Three.js Setup
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -139,7 +136,7 @@
         }
 
         const myTeam = Math.random() > 0.5 ? TEAM_PINK : TEAM_GREEN;
-        const player = createAgent(myTeam, true, (Math.random()-0.5)*200, (Math.random()-0.5)*200);
+        const player = createAgent(myTeam, true, (Math.random()-0.5)*150, (Math.random()-0.5)*150);
         agents.push(player);
 
         // --- Firebase Sync ---
@@ -181,8 +178,7 @@
             if (shouldSync) push(inkRef, { x, z, team });
         }
 
-        // --- Controls & Input ---
-        const isTouch = 'ontouchstart' in window;
+        // --- Inputs ---
         if(isTouch) {
             document.getElementById('mobileControls').style.display = 'flex';
             document.getElementById('joyLeft').style.display = 'block';
@@ -195,13 +191,19 @@
             startTimer();
         });
 
+        // スマホ操作
         const stick = document.getElementById('joyStick');
         window.addEventListener('touchstart', e => {
             Array.from(e.changedTouches).forEach(t => {
-                if(t.clientX < window.innerWidth/2) touchState.moveID = t.identifier;
-                else { touchState.lookID = t.identifier; touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY; }
+                if(t.clientX < window.innerWidth / 2) touchState.moveID = t.identifier;
+                else {
+                    touchState.lookID = t.identifier;
+                    touchState.lastLookX = t.clientX;
+                    touchState.lastLookY = t.clientY;
+                }
             });
-        });
+        }, { passive: false });
+
         window.addEventListener('touchmove', e => {
             Array.from(e.changedTouches).forEach(t => {
                 if(t.identifier === touchState.moveID) {
@@ -209,15 +211,17 @@
                     const dx = t.clientX - (rect.left + 60), dy = t.clientY - (rect.top + 60);
                     const dist = Math.min(50, Math.hypot(dx, dy));
                     const angle = Math.atan2(dy, dx);
-                    touchState.move.x = (Math.cos(angle) * dist) / 50; touchState.move.y = (Math.sin(angle) * dist) / 50;
+                    touchState.move.x = (Math.cos(angle) * dist) / 50;
+                    touchState.move.y = (Math.sin(angle) * dist) / 50;
                     stick.style.transform = `translate(${touchState.move.x*50}px, ${touchState.move.y*50}px)`;
                 } else if(t.identifier === touchState.lookID) {
                     yaw -= (t.clientX - touchState.lastLookX) * 0.005;
-                    pitch = Math.max(-1.0, Math.min(1.2, pitch - (t.clientY - touchState.lastLookY) * 0.005));
+                    pitch = Math.max(-0.6, Math.min(0.8, pitch - (t.clientY - touchState.lastLookY) * 0.005));
                     touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY;
                 }
             });
-        });
+        }, { passive: false });
+
         window.addEventListener('touchend', e => {
             Array.from(e.changedTouches).forEach(t => {
                 if(t.identifier === touchState.moveID) { touchState.move = {x:0, y:0}; stick.style.transform = `translate(0,0)`; }
@@ -232,7 +236,7 @@
         document.addEventListener('mousemove', (e) => {
             if (document.pointerLockElement === renderer.domElement) {
                 yaw -= e.movementX * 0.0025;
-                pitch = Math.max(-1.0, Math.min(1.2, pitch - e.movementY * 0.0025));
+                pitch = Math.max(-0.6, Math.min(0.8, pitch - e.movementY * 0.0025));
             }
         });
 
@@ -264,7 +268,7 @@
                     }
                 });
 
-                // Ink check
+                // Ink interaction
                 let onInk = null;
                 for (let i = splats.length - 1; i >= Math.max(0, splats.length - 50); i--) {
                     if (Math.hypot(splats[i].x - player.group.position.x, splats[i].z - player.group.position.z) < 8) {
@@ -289,14 +293,14 @@
                 if (mv.length() > 0) player.group.translateOnAxis(mv.normalize(), speed); 
                 player.group.rotation.y = yaw;
                 
-                // Obstacle collision
+                // Collision
                 const pBox = new THREE.Box3().setFromCenterAndSize(player.group.position, new THREE.Vector3(2.5, 4, 2.5));
                 colliders.forEach(c => { if(pBox.intersectsBox(c)) player.group.position.set(oldPos.x, player.group.position.y, oldPos.z); });
 
                 // Shoot
                 if (isShooting && player.ink > 2) {
-                    player.ink -= 0.8;
-                    if (Math.random() > 0.5) {
+                    player.ink -= 0.7;
+                    if (Math.random() > 0.4) {
                         const b = new THREE.Mesh(new THREE.SphereGeometry(0.8), new THREE.MeshBasicMaterial({ color: player.team }));
                         b.position.copy(player.group.position).y += 1; scene.add(b);
                         const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
@@ -304,7 +308,7 @@
                     }
                 }
 
-                // Sync My Position to Firebase
+                // Sync
                 set(playersRef, { 
                     x: player.group.position.x, 
                     z: player.group.position.z, 
@@ -314,7 +318,7 @@
                 });
             }
 
-            // Camera follow
+            // Camera
             const dist = 18;
             camera.position.set(
                 player.group.position.x + dist * Math.sin(yaw) * Math.cos(pitch),
@@ -323,7 +327,7 @@
             );
             camera.lookAt(player.group.position.x, player.group.position.y + 1, player.group.position.z);
 
-            // UI Rendering
+            // HUD
             document.getElementById('inkFill').style.width = player.ink + '%';
             mapCtx.fillStyle = '#111'; mapCtx.fillRect(0, 0, 180, 180);
             let pCount = 0;
@@ -349,7 +353,6 @@
 
         window.onbeforeunload = () => remove(playersRef);
         window.onresize = () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
-        
         update();
     </script>
 </body>
