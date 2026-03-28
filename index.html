@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>3D Ink Shooter - Online & Mobile</title>
+    <title>3D Ink Shooter - 4vs4 CPU Battle</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body { margin: 0; overflow: hidden; background: #050505; font-family: 'Arial Black', sans-serif; user-select: none; touch-action: none; }
@@ -18,25 +18,20 @@
         #miniMap { width: 100%; height: 100%; }
         #ratioBar { position: absolute; bottom: 20px; left: 150px; width: 20px; height: 120px; background: #3D9140; border: 2px solid white; display: flex; flex-direction: column-reverse; overflow: hidden; z-index: 100; }
         #pinkRatioFill { width: 100%; background: #FD2996; transition: height 0.3s; }
-        
         #startOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 40px; background: rgba(0,0,0,0.8); z-index: 1000; cursor: pointer; text-align: center; }
-        #countdownDisp { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 120px; display: none; z-index: 1001; text-shadow: 0 0 30px #FD2996; pointer-events: none; }
         #finishText { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0); color: #fff; font-size: 80px; text-shadow: 0 0 30px #000; z-index: 1100; transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; }
         #resultScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 1200; color: white; }
-        
-        /* Mobile UI */
         #mobileControls { position: absolute; bottom: 20px; right: 20px; display: none; gap: 20px; z-index: 500; }
-        .m-btn { width: 85px; height: 85px; background: rgba(255,255,255,0.2); border: 4px solid white; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 16px; touch-action: none; -webkit-tap-highlight-color: transparent; }
-        #joyLeft { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; display: none; z-index: 500; border: 2px solid rgba(255,255,255,0.3); touch-action: none; }
-        #joyStick { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: white; border-radius: 50%; opacity: 0.5; pointer-events: none; }
+        .m-btn { width: 85px; height: 85px; background: rgba(255,255,255,0.2); border: 4px solid white; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 16px; touch-action: none; }
+        #joyLeft { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; display: none; z-index: 500; border: 2px solid rgba(255,255,255,0.3); }
+        #joyStick { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: white; border-radius: 50%; opacity: 0.5; }
     </style>
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
 </head>
 <body>
 
     <div id="crosshair"></div>
-    <div id="startOverlay">TAP TO START</div>
-    <div id="countdownDisp">3</div>
+    <div id="startOverlay">TAP TO START (4V4 CPU)</div>
     <div id="finishText">FINISH!</div>
 
     <div id="ui">
@@ -84,7 +79,7 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const myId = Math.random().toString(36).substring(2, 10);
+        const myId = "player_" + Math.random().toString(36).substring(2, 7);
         const playersRef = ref(db, 'players/' + myId);
         const inkRef = ref(db, 'ink');
 
@@ -125,43 +120,27 @@
         addObstacle(60, 8, 60, 0, 4, 0);
 
         const agents = [], bullets = [], splats = [];
-        const otherPlayers = {};
 
-        function createAgent(team, isPlayer, x, z) {
+        function createAgent(team, isPlayer, x, z, isCPU = false) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.BoxGeometry(2.5, 3.5, 2.5), new THREE.MeshPhongMaterial({ color: team }));
             group.add(body); group.position.set(x, 1.75, z);
             scene.add(group);
-            return { group, team, isPlayer, hp: 100, ink: 100, isDead: false, isStealth: false };
+            const agent = { 
+                group, team, isPlayer, isCPU, 
+                hp: 100, ink: 100, isDead: false, 
+                cpuDir: new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize(),
+                cpuTimer: 0, 
+                spawnPos: {x, z} 
+            };
+            agents.push(agent);
+            return agent;
         }
 
-        const myTeam = Math.random() > 0.5 ? TEAM_PINK : TEAM_GREEN;
-        const player = createAgent(myTeam, true, (Math.random()-0.5)*150, (Math.random()-0.5)*150);
-        agents.push(player);
-
-        // --- Firebase Sync ---
-        onValue(ref(db, 'players'), (snapshot) => {
-            const data = snapshot.val();
-            if(!data) return;
-            for (let id in data) {
-                if (id === myId) continue;
-                const p = data[id];
-                if (!otherPlayers[id]) {
-                    otherPlayers[id] = createAgent(p.team, false, p.x, p.z);
-                } else {
-                    otherPlayers[id].group.position.lerp(new THREE.Vector3(p.x, p.isStealth ? 0.5 : 1.75, p.z), 0.2);
-                    otherPlayers[id].group.rotation.y = p.ry;
-                    otherPlayers[id].group.scale.y = p.isStealth ? 0.2 : 1.0;
-                }
-            }
-        });
-
-        onChildRemoved(ref(db, 'players'), (snapshot) => {
-            if (otherPlayers[snapshot.key]) {
-                scene.remove(otherPlayers[snapshot.key].group);
-                delete otherPlayers[snapshot.key];
-            }
-        });
+        // チーム生成 (自分含め4vs4)
+        const player = createAgent(TEAM_PINK, true, -100, 100);
+        for(let i=0; i<3; i++) createAgent(TEAM_PINK, false, -100 + (i*10), 80, true); // 味方CPU
+        for(let i=0; i<4; i++) createAgent(TEAM_GREEN, false, 100 - (i*10), -100, true); // 敵CPU
 
         onChildAdded(inkRef, (snapshot) => {
             const data = snapshot.val();
@@ -174,7 +153,7 @@
             const s = new THREE.Mesh(new THREE.CircleGeometry(7, 8), new THREE.MeshBasicMaterial({ color: team, side: THREE.DoubleSide }));
             s.position.set(x, inkHeightOffset, z); s.rotation.x = -Math.PI / 2;
             scene.add(s); splats.push({ x, z, team, mesh: s });
-            if (splats.length > 2000) { const old = splats.shift(); scene.remove(old.mesh); }
+            if (splats.length > 1500) { const old = splats.shift(); scene.remove(old.mesh); }
             if (shouldSync) push(inkRef, { x, z, team });
         }
 
@@ -191,16 +170,11 @@
             startTimer();
         });
 
-        // スマホ操作
         const stick = document.getElementById('joyStick');
         window.addEventListener('touchstart', e => {
             Array.from(e.changedTouches).forEach(t => {
                 if(t.clientX < window.innerWidth / 2) touchState.moveID = t.identifier;
-                else {
-                    touchState.lookID = t.identifier;
-                    touchState.lastLookX = t.clientX;
-                    touchState.lastLookY = t.clientY;
-                }
+                else { touchState.lookID = t.identifier; touchState.lastLookX = t.clientX; touchState.lastLookY = t.clientY; }
             });
         }, { passive: false });
 
@@ -259,62 +233,86 @@
             requestAnimationFrame(update);
             
             if (gameActive && !gameOver) {
-                // Bullet physics
+                // Bullets
                 bullets.forEach((b, i) => {
-                    b.mesh.position.addScaledVector(b.dir, 2.5);
+                    b.mesh.position.addScaledVector(b.dir, 2.0);
+                    
+                    // 当たり判定 (CPU/Player)
+                    agents.forEach(a => {
+                        if(!a.isDead && a.team !== b.team && b.mesh.position.distanceTo(a.group.position) < 3) {
+                            a.isDead = true;
+                            a.group.visible = false;
+                            setTimeout(() => { 
+                                a.isDead = false; a.group.visible = true; 
+                                a.group.position.set(a.spawnPos.x, 1.75, a.spawnPos.z); 
+                            }, 4000);
+                            b.life = 0;
+                        }
+                    });
+
                     if (--b.life <= 0 || b.mesh.position.y <= 0) {
                         localCreateSplat(b.mesh.position.x, b.mesh.position.z, b.team, true);
                         scene.remove(b.mesh); bullets.splice(i, 1);
                     }
                 });
 
-                // Ink interaction
-                let onInk = null;
-                for (let i = splats.length - 1; i >= Math.max(0, splats.length - 50); i--) {
-                    if (Math.hypot(splats[i].x - player.group.position.x, splats[i].z - player.group.position.z) < 8) {
-                        onInk = splats[i].team; break;
+                // Agents logic
+                agents.forEach(a => {
+                    if(a.isDead) return;
+
+                    // Ink Check
+                    let onInk = null;
+                    for (let i = splats.length - 1; i >= Math.max(0, splats.length - 30); i--) {
+                        if (Math.hypot(splats[i].x - a.group.position.x, splats[i].z - a.group.position.z) < 8) {
+                            onInk = splats[i].team; break;
+                        }
                     }
-                }
 
-                player.isStealth = !isShooting && (keys['ShiftLeft'] || isMobileDive) && onInk === player.team;
-                player.group.scale.y = player.isStealth ? 0.2 : 1.0;
-                player.group.position.y = player.isStealth ? 0.5 : 1.75;
-                player.ink = player.isStealth ? Math.min(100, player.ink + 1.5) : Math.min(100, player.ink + 0.1);
+                    if(a.isPlayer) {
+                        // Player Move
+                        player.isStealth = !isShooting && (keys['ShiftLeft'] || isMobileDive) && onInk === player.team;
+                        player.group.scale.y = player.isStealth ? 0.2 : 1.0;
+                        player.group.position.y = player.isStealth ? 0.5 : 1.75;
+                        player.ink = player.isStealth ? Math.min(100, player.ink + 1.2) : Math.min(100, player.ink + 0.1);
 
-                let speed = (onInk && onInk !== player.team) ? 0.1 : (player.isStealth ? 1.2 : 0.6);
-                const oldPos = player.group.position.clone();
+                        let speed = (onInk && onInk !== player.team) ? 0.1 : (player.isStealth ? 1.1 : 0.55);
+                        const oldPos = player.group.position.clone();
+                        const mv = new THREE.Vector3();
+                        if (isTouch) { mv.x = touchState.move.x; mv.z = touchState.move.y; }
+                        else {
+                            if (keys['KeyW']) mv.z -= 1; if (keys['KeyS']) mv.z += 1;
+                            if (keys['KeyA']) mv.x -= 1; if (keys['KeyD']) mv.x += 1;
+                        }
+                        if (mv.length() > 0) player.group.translateOnAxis(mv.normalize(), speed); 
+                        player.group.rotation.y = yaw;
 
-                const mv = new THREE.Vector3();
-                if (isTouch) { mv.x = touchState.move.x; mv.z = touchState.move.y; }
-                else {
-                    if (keys['KeyW']) mv.z -= 1; if (keys['KeyS']) mv.z += 1;
-                    if (keys['KeyA']) mv.x -= 1; if (keys['KeyD']) mv.x += 1;
-                }
-                if (mv.length() > 0) player.group.translateOnAxis(mv.normalize(), speed); 
-                player.group.rotation.y = yaw;
-                
-                // Collision
-                const pBox = new THREE.Box3().setFromCenterAndSize(player.group.position, new THREE.Vector3(2.5, 4, 2.5));
-                colliders.forEach(c => { if(pBox.intersectsBox(c)) player.group.position.set(oldPos.x, player.group.position.y, oldPos.z); });
+                        if (isShooting && player.ink > 2) {
+                            player.ink -= 0.6;
+                            if (Math.random() > 0.5) {
+                                const b = new THREE.Mesh(new THREE.SphereGeometry(0.7), new THREE.MeshBasicMaterial({ color: player.team }));
+                                b.position.copy(player.group.position).y += 1; scene.add(b);
+                                const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+                                bullets.push({ mesh: b, dir, life: 60, team: player.team });
+                            }
+                        }
+                        set(playersRef, { x: player.group.position.x, z: player.group.position.z, ry: yaw, team: player.team, isStealth: player.isStealth });
+                    } else if(a.isCPU) {
+                        // CPU Move AI
+                        a.cpuTimer--;
+                        if(a.cpuTimer <= 0) {
+                            a.cpuTimer = 60 + Math.random() * 100;
+                            a.cpuDir.set(Math.random()-0.5, 0, Math.random()-0.5).normalize();
+                        }
+                        a.group.position.addScaledVector(a.cpuDir, 0.35);
+                        a.group.rotation.y = Math.atan2(a.cpuDir.x, a.cpuDir.z);
 
-                // Shoot
-                if (isShooting && player.ink > 2) {
-                    player.ink -= 0.7;
-                    if (Math.random() > 0.4) {
-                        const b = new THREE.Mesh(new THREE.SphereGeometry(0.8), new THREE.MeshBasicMaterial({ color: player.team }));
-                        b.position.copy(player.group.position).y += 1; scene.add(b);
-                        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-                        bullets.push({ mesh: b, dir, life: 50, team: player.team });
+                        // CPU Shoot AI
+                        if(Math.random() > 0.97) {
+                            const b = new THREE.Mesh(new THREE.SphereGeometry(0.7), new THREE.MeshBasicMaterial({ color: a.team }));
+                            b.position.copy(a.group.position).y += 1; scene.add(b);
+                            bullets.push({ mesh: b, dir: a.cpuDir.clone(), life: 50, team: a.team });
+                        }
                     }
-                }
-
-                // Sync
-                set(playersRef, { 
-                    x: player.group.position.x, 
-                    z: player.group.position.z, 
-                    ry: yaw, 
-                    team: player.team,
-                    isStealth: player.isStealth 
                 });
             }
 
@@ -327,7 +325,7 @@
             );
             camera.lookAt(player.group.position.x, player.group.position.y + 1, player.group.position.z);
 
-            // HUD
+            // UI Rendering
             document.getElementById('inkFill').style.width = player.ink + '%';
             mapCtx.fillStyle = '#111'; mapCtx.fillRect(0, 0, 180, 180);
             let pCount = 0;
@@ -345,13 +343,11 @@
         }
 
         function finishGame() {
-            gameOver = true;
-            remove(playersRef);
+            gameOver = true; remove(playersRef);
             document.getElementById('finishText').style.transform = 'translate(-50%, -50%) scale(1)';
             setTimeout(() => { document.getElementById('resultScreen').style.display = 'flex'; }, 3000);
         }
 
-        window.onbeforeunload = () => remove(playersRef);
         window.onresize = () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
         update();
     </script>
