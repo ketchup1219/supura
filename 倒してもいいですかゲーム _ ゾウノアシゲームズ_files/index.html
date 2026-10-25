@@ -186,11 +186,11 @@
     contact = 0; while (gapNow(contact) > 0 && contact < MAX) contact += 0.1;
     gap = gapNow(0);
     bubbles = [];
-    say("me", "たおしてもいいですか？", "倒してもいいですか？", "May I recline?", { pitch: 290, ko: "젖혀도 될까요?", zh: "可以把椅背放倒吗？", tw: "可以把椅背放倒嗎？" });
+    say("me", "たどころこうじ？", "114514？", "May I recline?", { pitch: 290, ko: "젖혀도 될까요?", zh: "可以把椅背放倒吗？", tw: "可以把椅背放倒嗎？" });
     /* 30回に1回くらい、断られて終わり */
     denied = forceDeny || Math.random() < 1 / 30;
-    if (denied) say("back", "だめです", "ダメです", "No.", { pitch: 200, delay: 1.7, mora: 0.15, ko: "안 돼요.", zh: "不行。", tw: "不行。" });
-    else say("back", "どうぞ", "どうぞ", "Sure.", { pitch: 210, delay: 1.7, mora: 0.15, ko: "그러세요.", zh: "请便。", tw: "請便。" });
+    if (denied) say("back", "いんむちゅうきらいなんだよね", "淫夢中嫌いなんだよね", "No.", { pitch: 200, delay: 1.7, mora: 0.15, ko: "안 돼요.", zh: "不行。", tw: "不行。" });
+    else say("back", "いんむきんぐ", "インムキング", "Sure.", { pitch: 210, delay: 1.7, mora: 0.15, ko: "그러세요.", zh: "请便。", tw: "請便。" });
   }
 
   /* 背もたれの頭の部分と後ろの人の頭のすき間（メートル）。a は度 */
@@ -229,7 +229,7 @@
   var T2 = 0;
   function toResult() {
     state = S.RESULT;
-    score = failed ? 0 : Math.round(gap * 100000) / 100;
+    score = failed ? 0 : 0.01; // ←ここを固定値の 0.01 に変更する
   }
 
   /* ============ 入力 ============ */
